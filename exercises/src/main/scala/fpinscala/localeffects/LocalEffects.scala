@@ -98,7 +98,21 @@ sealed abstract class STArray[S,A](implicit manifest: Manifest[A]) {
   // Turn the array into an immutable list
   def freeze: ST[S,List[A]] = ST(value.toList)
 
-  def fill(xs: Map[Int,A]): ST[S,Unit] = ???
+  def fill(xs: Map[Int,A]): ST[S,Unit] = {
+    // 答え
+    xs.foldRight(ST[S,Unit](())) {
+      case ((k, v), st) => st flatMap (_ => write(k, v))
+    }
+    // 試したコードその1
+    // xs.foldRight(ST[S,Unit](())) {
+    //   case ((k, v), _) => write(k, v)
+    // }
+    // ST[S,Unit](())
+    // 試したコードその2
+    // xs.foldRight(ST[S,Unit](())) {
+    //   case ((k, v), st) => write(k, v)
+    // }
+  }
 
   def swap(i: Int, j: Int): ST[S,Unit] = for {
     x <- read(i)
@@ -124,9 +138,28 @@ object STArray {
 object Immutable {
   def noop[S] = ST[S,Unit](())
 
-  def partition[S](a: STArray[S,Int], l: Int, r: Int, pivot: Int): ST[S,Int] = ???
+  def partition[S](a: STArray[S,Int], l: Int, r: Int, pivot: Int): ST[S,Int] = for {
+    pivotVal <- a.read(pivot)
+    _ <- a.swap(pivot, r)
+    j <- STRef(l)
+    _ <- (l until r).foldLeft(noop[S])((s, i) => for {
+      _ <- s
+      curVal <- a.read(i)
+      _ <- if (curVal < pivotVal) (for {
+        jVal <- j.read
+        _ <- a.swap(i, jVal)
+        _ <- j.write(jVal + 1)
+      } yield ()) else noop[S]
+    } yield ())
+    resultPos <- j.read
+    _ <- a.swap(resultPos, r)
+  } yield resultPos
 
-  def qs[S](a: STArray[S,Int], l: Int, r: Int): ST[S, Unit] = ???
+  def qs[S](a: STArray[S,Int], l: Int, r: Int): ST[S, Unit] = if (l < r) for {
+    pi <- partition(a, l, r, l + (r - l) / 2)
+    _ <- qs(a, l, pi - 1)
+    _ <- qs(a, pi + 1, r)
+  } yield () else noop[S]
 
   def quicksort(xs: List[Int]): List[Int] =
     if (xs.isEmpty) xs else ST.runST(new RunnableST[List[Int]] {
@@ -140,4 +173,38 @@ object Immutable {
 }
 
 import scala.collection.mutable.HashMap
+
+sealed trait STMap[S,K,V] {
+  protected def map: HashMap[K,V]
+
+  def size: ST[S,Int] = ST(map.size)
+
+  // Get the value under a key
+  def apply(k: K): ST[S,V] = ST(map(k))
+
+  // Get the value under a key, or None if the key does not exist
+  def get(k: K): ST[S,Option[V]] = ST(map.get(k))
+
+  // Add a value under a key
+  def +=(kv: (K, V)): ST[S,Unit] = {
+    ST(map += kv)
+  }
+
+  // Remove a key
+  def -=(k: K): ST[S,Unit] = {
+    ST(map -= k)
+  }
+}
+
+object STMap {
+  def empty[S,K,V]: ST[S, STMap[S,K,V]] =
+    ST(new STMap[S,K,V] {
+      lazy val map = HashMap.empty[K,V]
+    })
+
+  def fromMap[S,K,V](m: Map[K,V]): ST[S, STMap[S,K,V]] =
+    ST(new STMap[S,K,V] {
+      lazy val map = HashMap.empty[K,V] ++ m
+    })
+}
 
